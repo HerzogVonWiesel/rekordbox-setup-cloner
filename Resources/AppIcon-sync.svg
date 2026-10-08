@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">Rekordbox Setup Cloner — sync</title>
+  <desc id="description">One centred white three-part hexagon, with two sync arrows on a charcoal rounded square.</desc>
+  <defs>
+    <linearGradient id="tile" gradientUnits="userSpaceOnUse" x1="256" y1="88" x2="768" y2="936">
+      <stop stop-color="#292f3a"/><stop offset="1" stop-color="#0c1017"/>
+    </linearGradient>
+  </defs>
+  <rect x="88" y="88" width="848" height="848" rx="190" fill="url(#tile)"/>
+  <rect x="88" y="88" width="848" height="848" rx="190" fill="none" stroke="#fff" stroke-opacity=".12" stroke-width="2"/>
+  <g transform="translate(512 512) scale(1.3) translate(-580 -578)">
+  <defs><clipPath id="front-clip"><path d="M 569.426 362.105 Q 580.000 356.000 590.574 362.105 L 761.683 460.895 Q 772.258 467.000 772.258 479.210 L 772.258 676.790 Q 772.258 689.000 761.683 695.105 L 590.574 793.895 Q 580.000 800.000 569.426 793.895 L 398.317 695.105 Q 387.742 689.000 387.742 676.790 L 387.742 479.210 Q 387.742 467.000 398.317 460.895 Z"/></clipPath></defs>
+  <path d="M 569.426 362.105 Q 580.000 356.000 590.574 362.105 L 761.683 460.895 Q 772.258 467.000 772.258 479.210 L 772.258 676.790 Q 772.258 689.000 761.683 695.105 L 590.574 793.895 Q 580.000 800.000 569.426 793.895 L 398.317 695.105 Q 387.742 689.000 387.742 676.790 L 387.742 479.210 Q 387.742 467.000 398.317 460.895 Z" fill="#141b25"/>
+  <g clip-path="url(#front-clip)">
+    <path d="M 569.426 362.105 Q 580.000 356.000 590.574 362.105 L 761.683 460.895 Q 772.258 467.000 772.258 479.210 L 772.258 676.790 Q 772.258 689.000 761.683 695.105 L 590.574 793.895 Q 580.000 800.000 569.426 793.895 L 398.317 695.105 Q 387.742 689.000 387.742 676.790 L 387.742 479.210 Q 387.742 467.000 398.317 460.895 Z" fill="#f3f6fa"/>
+    <circle cx="580.0" cy="578.0" r="137.0" fill="#141b25"/>
+    <path d="M 580.000 578.000 L 353.101 447.000 M 580.000 578.000 L 806.899 447.000 M 580.000 578.000 L 580.000 840.000" fill="none" stroke="#141b25" stroke-width="44.0"/>
+  </g>
+<path d="M 508.583 552.006 C 522.939 512.564 566.551 492.228 605.994 506.583 C 627.104 514.267 643.733 530.896 651.417 552.006" fill="none" stroke="#70e0d9" stroke-width="19" stroke-linecap="round"/>
+<path d="M 659.283 573.619 L 667.986 533.206 L 626.639 548.255 Z" fill="#70e0d9"/>
+<path d="M 651.417 603.994 C 637.061 643.436 593.449 663.772 554.006 649.417 C 532.896 641.733 516.267 625.104 508.583 603.994" fill="none" stroke="#70e0d9" stroke-width="19" stroke-linecap="round"/>
+<path d="M 500.717 582.381 L 492.014 622.794 L 533.361 607.745 Z" fill="#70e0d9"/>
+</g>
+</svg>

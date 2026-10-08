@@ -1,0 +1,110 @@
+name: macOS builds and releases
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    name: Universal Mac app
+    runs-on: macos-15
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Read and validate version
+        id: version
+        shell: bash
+        run: |
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'Info.plist must contain a three-part version number.' >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo 'The release tag must match CFBundleShortVersionString in Resources/Info.plist.' >&2
+            exit 1
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      # Compile/package only: never start the application or run application tests.
+      - name: Build app and release archive
+        run: bash scripts/package-release.sh
+
+      - name: Check binary architectures and ad-hoc signature
+        run: |
+          xcrun lipo 'dist/Rekordbox Setup Cloner.app/Contents/MacOS/RekordboxSetupCloner' -verify_arch arm64 x86_64
+          codesign --verify --deep --strict 'dist/Rekordbox Setup Cloner.app'
+
+      - name: Upload downloadable build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Rekordbox-Setup-Cloner-v${{ steps.version.outputs.version }}-macos-universal
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  release:
+    name: Publish tagged release
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download built archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: Rekordbox-Setup-Cloner-v${{ needs.build.outputs.version }}-macos-universal
+          path: release
+
+      - name: Create release and attach archive/checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          # Keep releases marked as previews until runtime verification is complete.
+          cat > release-notes.md <<'NOTES'
+          Universal macOS app for Apple Silicon and Intel. Requires macOS 13 or later.
+
+          Download the macos-universal.zip asset, extract it, and move the app to Applications.
+          SHA256SUMS.txt contains the archive checksum.
+
+          This is a preview build. Compilation and packaging are automated; application runtime
+          and live rekordbox import/restore testing are still pending. The app is ad-hoc signed,
+          not Developer ID signed or notarized. See the README for installation and usage.
+          NOTES
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            # A rerun only fills in missing uploads; published assets are not overwritten.
+            for asset in release/*; do
+              name=$(basename "$asset")
+              if ! gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fxq "$name"; then
+                gh release upload "$RELEASE_TAG" "$asset"
+              fi
+            done
+          else
+            gh release create "$RELEASE_TAG" release/* \
+              --verify-tag --prerelease \
+              --title "Rekordbox Setup Cloner $RELEASE_TAG" \
+              --notes-file release-notes.md --generate-notes
+          fi
