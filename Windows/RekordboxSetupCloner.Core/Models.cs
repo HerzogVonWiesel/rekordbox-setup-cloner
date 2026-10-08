@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace RekordboxSetupCloner;
 
@@ -62,6 +63,15 @@ public sealed record RekordboxVersion(string Raw)
     }
     [JsonIgnore] public int? Major => Components?.FirstOrDefault();
     [JsonIgnore] public string Display => Components is { } parts ? string.Join('.', parts) : "Unknown";
+    [JsonIgnore] public string Label => Components != null ? $"rekordbox {Display}" : "rekordbox version unavailable";
+
+    public string? CompatibilityNotice(RekordboxVersion destination)
+    {
+        if (Components == null || destination.Components == null)
+            return "The rekordbox version is unavailable for the backup or destination. Matching preferences can still be imported; missing settings and incompatible file formats are skipped.";
+        if (Components.SequenceEqual(destination.Components)) return null;
+        return $"The backup uses rekordbox {Display}; the destination uses {destination.Display}. Versions differ, so only matching preferences and compatible file formats will be transferred.";
+    }
 }
 
 // Property names, ISO-8601 dates and base64 byte arrays match Swift's existing archive format.
@@ -76,7 +86,10 @@ public sealed record SetupProfile(string Format, int SchemaVersion, DateTimeOffs
 public sealed record Change(SettingsGroup Group, string Title, string Detail);
 public sealed record FileEdit(string Path, byte[]? Before, byte[]? After);
 public sealed record ImportPlan(string Destination, SetupProfile Profile, RekordboxVersion TargetVersion,
-    List<FileEdit> Edits, List<Change> Changes, List<string> Skipped, Dictionary<string, byte[]?> Observed);
+    List<FileEdit> Edits, List<Change> Changes, List<string> Skipped, Dictionary<string, byte[]?> Observed)
+{
+    public string? CompatibilityNotice => Profile.RekordboxVersion.CompatibilityNotice(TargetVersion);
+}
 public sealed record PadFXCopyPlan(string Destination, int SourceDeck, int TargetDeck, int[] Banks,
     RekordboxVersion Version, byte[] MainSettings, List<FileEdit> Edits, List<Change> Changes);
 public sealed record RecoveryEntry(string Path, byte[]? Original, string? AppliedSHA256);
@@ -87,20 +100,24 @@ public sealed record SettingsInspection(RekordboxVersion Version, Dictionary<Set
 
 public static class ArchiveJson
 {
-    public static readonly JsonSerializerOptions Options = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        MaxDepth = 32,
-        Converters = { new IsoDateConverter(), new JsonStringEnumConverter<SettingsGroup>(allowIntegerValues: false) }
-    };
+    public static JsonTypeInfo<SetupProfile> ProfileInfo => ArchiveJsonContext.Default.SetupProfile;
+    public static JsonTypeInfo<RecoveryArchive> RecoveryInfo => ArchiveJsonContext.Default.RecoveryArchive;
 
     // Swift's .iso8601 date decoder expects whole seconds, without fractional seconds.
-    private sealed class IsoDateConverter : JsonConverter<DateTimeOffset>
+    internal sealed class IsoDateConverter : JsonConverter<DateTimeOffset>
     {
         public override DateTimeOffset Read(ref Utf8JsonReader reader, Type type, JsonSerializerOptions options) => reader.GetDateTimeOffset();
         public override void Write(Utf8JsonWriter writer, DateTimeOffset value, JsonSerializerOptions options) =>
             writer.WriteStringValue(value.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture));
     }
+
+    internal sealed class GroupConverter() : JsonStringEnumConverter<SettingsGroup>(allowIntegerValues: false);
 }
+
+[JsonSourceGenerationOptions(GenerationMode = JsonSourceGenerationMode.Metadata,
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = true,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull, MaxDepth = 32,
+    Converters = [typeof(ArchiveJson.IsoDateConverter), typeof(ArchiveJson.GroupConverter)])]
+[JsonSerializable(typeof(SetupProfile))]
+[JsonSerializable(typeof(RecoveryArchive))]
+internal partial class ArchiveJsonContext : JsonSerializerContext;

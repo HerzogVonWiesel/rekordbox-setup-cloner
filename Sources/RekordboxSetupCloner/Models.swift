@@ -18,6 +18,15 @@ struct RekordboxVersion: Codable, Equatable {
     }
     var major: Int? { components?.first }
     var display: String { components?.map(String.init).joined(separator: ".") ?? "Unknown" }
+    var label: String { components != nil ? "rekordbox \(display)" : "rekordbox version unavailable" }
+
+    func compatibilityNotice(destination: RekordboxVersion) -> String? {
+        guard let source = components, let target = destination.components else {
+            return "The rekordbox version is unavailable for the backup or destination. Matching preferences can still be imported; missing settings and incompatible file formats are skipped."
+        }
+        guard source != target else { return nil }
+        return "The backup uses rekordbox \(display); the destination uses \(destination.display). Versions differ, so only matching preferences and compatible file formats will be transferred."
+    }
 }
 
 struct SetupProfile: Codable {
@@ -61,6 +70,7 @@ struct ImportPlan {
     let skipped: [String]
     /// Includes unchanged inspected files so a stale preview cannot be committed.
     let observed: [String: Data]
+    var compatibilityNotice: String? { profile.rekordboxVersion.compatibilityNotice(destination: targetVersion) }
 }
 
 struct PadFXCopyPlan: Identifiable {

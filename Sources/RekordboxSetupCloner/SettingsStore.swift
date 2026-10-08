@@ -74,11 +74,9 @@ final class SettingsStore {
 
     private func version(in main: Data) throws -> RekordboxVersion {
         let properties = try SettingsXML.scalars(main)
-        let version = RekordboxVersion(raw: properties["LaunchedVersion"] ?? "")
-        guard let major = version.major, [6, 7].contains(major) else {
-            throw SetupError("Could not identify rekordbox 6 or 7 from LaunchedVersion. Open and quit rekordbox on this Mac, then select its settings folder again.")
-        }
-        return version
+        let raw = (properties["LaunchedVersion"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // Informational metadata only. Compatibility is checked against destination settings.
+        return RekordboxVersion(raw: raw.count <= 64 && raw.rangeOfCharacter(from: .controlCharacters) == nil ? raw : "")
     }
 
     private func auxiliaryPaths(in directory: URL) throws -> [String] {
@@ -175,7 +173,8 @@ final class SettingsStore {
         guard profile.format == "rekordbox-setup", [1, 2].contains(profile.schemaVersion),
               profile.schemaVersion != 1 || profile.structuredPreferences.isEmpty,
               !profile.name.isEmpty, profile.name.count <= 120,
-              let major = profile.rekordboxVersion.major, [6, 7].contains(major),
+              profile.rekordboxVersion.raw.count <= 64,
+              profile.rekordboxVersion.raw.rangeOfCharacter(from: .controlCharacters) == nil,
               !profile.groups.isEmpty, Set(profile.groups).count == profile.groups.count,
               profile.files.count <= SettingsPolicy.maxFiles,
               profile.preferenceCount + profile.files.count > 0 else {
@@ -247,9 +246,6 @@ final class SettingsStore {
         let directory = try root(destination)
         guard let main = try read(SettingsPolicy.mainFile, in: directory) else { throw SetupError("Missing rekordbox3.settings.") }
         let targetVersion = try version(in: main)
-        guard targetVersion.major == profile.rekordboxVersion.major else {
-            throw SetupError("This backup is from rekordbox \(profile.rekordboxVersion.display); this Mac last used \(targetVersion.display). Use the same major version on both Macs.")
-        }
         var edits: [FileEdit] = []
         var changes: [Change] = []
         var skipped: [String] = []
@@ -267,7 +263,15 @@ final class SettingsStore {
                 continue
             }
             observed[file] = before
-            let current = try SettingsXML.scalars(before, file: file)
+            let current: [String: String]
+            let currentElements: [String: XMLElement]
+            do {
+                current = try SettingsXML.scalars(before, file: file)
+                currentElements = try SettingsXML.elements(SettingsXML.parse(before))
+            } catch {
+                skipped.append("\(file): destination preference structure is unsupported")
+                continue
+            }
             var updates: [String: String] = [:]
             for key in incoming.keys.sorted() {
                 guard let oldValue = current[key] else {
@@ -280,7 +284,6 @@ final class SettingsStore {
                 changes.append(Change(id: "\(file)/\(key)", group: SettingsPolicy.group(for: key, in: file)!,
                                       title: key, detail: "\(oldValue) → \(newValue)"))
             }
-            let currentElements = try SettingsXML.elements(SettingsXML.parse(before))
             var structureUpdates: [String: Data] = [:]
             for key in incomingStructures.keys.sorted() {
                 guard let original = currentElements[key] else {
@@ -326,6 +329,11 @@ final class SettingsStore {
             }
             let after = profile.files[path]!
             guard before != after else { continue }
+            if let before, (path.hasSuffix(".xml") || path.hasSuffix(".mappings")),
+               !SettingsXML.compatibleFile(before, after) {
+                skipped.append("\(path): XML file format differs or is unsupported on this Mac")
+                continue
+            }
             edits.append(FileEdit(path: path, before: before, after: after))
             changes.append(Change(id: path, group: group, title: path,
                                   detail: before == nil ? "Add mapping file" : "Replace settings file"))

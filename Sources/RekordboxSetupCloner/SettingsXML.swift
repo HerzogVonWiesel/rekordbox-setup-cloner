@@ -197,6 +197,48 @@ enum SettingsXML {
         return lhs.name == rhs.name && attributes(lhs) == attributes(rhs) && lhs.elements.count == rhs.elements.count &&
             zip(lhs.elements, rhs.elements).allSatisfy { structureEqual($0.0, $0.1) }
     }
+
+    /// Compare whole-file schemas, preserving destination-only fields and record identities.
+    static func compatibleFile(_ current: Data, _ incoming: Data) -> Bool {
+        guard let a = try? parse(current), let b = try? parse(incoming),
+              let lhs = a.rootElement(), let rhs = b.rootElement(),
+              (try? elements(a)) != nil, (try? elements(b)) != nil else { return false }
+        func formatField(_ name: String) -> Bool {
+            ["version", "formatversion", "schemaversion"].contains(name.lowercased())
+        }
+        func identities(_ node: XMLElement) -> [String: String] {
+            var result: [String: String] = [:]
+            for attr in node.attributes ?? [] {
+                guard let name = attr.name else { continue }
+                if (node.name == "VALUE" && name == "name") ||
+                    ["deckNo", "modeIndex", "padIndex", "idx", "index", "unitNo"].contains(name) || formatField(name) {
+                    result[name] = attr.stringValue ?? ""
+                }
+            }
+            return result
+        }
+        func key(_ node: XMLElement, position: Int) -> String {
+            let ids = identities(node)
+            let identity = ids.isEmpty ? String(position) : ids.keys.sorted().map {
+                "\($0)=\(ids[$0]!.count):\(ids[$0]!)"
+            }.joined(separator: ";")
+            return "\(node.name ?? ""):\(identity)"
+        }
+        func schema(_ x: XMLElement, _ y: XMLElement, depth: Int) -> Bool {
+            guard depth <= 64, x.name == y.name,
+                  Set((x.attributes ?? []).compactMap(\.name)) == Set((y.attributes ?? []).compactMap(\.name)),
+                  identities(x) == identities(y) else { return false }
+            if x.name == "VALUE", formatField(x.attribute(forName: "name")?.stringValue ?? ""),
+               x.attribute(forName: "val")?.stringValue != y.attribute(forName: "val")?.stringValue { return false }
+            let left = x.elements.enumerated().map { (key($0.element, position: $0.offset), $0.element) }.sorted { $0.0 < $1.0 }
+            let right = y.elements.enumerated().map { (key($0.element, position: $0.offset), $0.element) }.sorted { $0.0 < $1.0 }
+            return left.count == right.count && Set(left.map { $0.0 }).count == left.count &&
+                zip(left, right).allSatisfy { pair in
+                    pair.0.0 == pair.1.0 && schema(pair.0.1, pair.1.1, depth: depth + 1)
+                }
+        }
+        return schema(lhs, rhs, depth: 0)
+    }
 }
 
 private extension XMLElement {

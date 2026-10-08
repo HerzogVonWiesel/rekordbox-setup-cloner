@@ -195,4 +195,43 @@ public static class SettingsXml
         a.Attributes().ToDictionary(x => x.Name, x => x.Value).OrderBy(k => k.Key.ToString(), StringComparer.Ordinal)
             .SequenceEqual(b.Attributes().ToDictionary(x => x.Name, x => x.Value).OrderBy(k => k.Key.ToString(), StringComparer.Ordinal)) &&
         a.Elements().Count() == b.Elements().Count() && a.Elements().Zip(b.Elements()).All(pair => StructureEqual(pair.First, pair.Second));
+
+    // Whole XML files must use the same records/fields before replacing a counterpart.
+    // Values can differ; named properties, slot identities and explicit format versions cannot.
+    public static bool CompatibleFile(byte[] current, byte[] incoming)
+    {
+        XDocument a, b;
+        try
+        {
+            a = Parse(current);
+            b = Parse(incoming);
+            _ = Elements(a);
+            _ = Elements(b);
+        }
+        catch (Exception error) when (error is SetupException or XmlException) { return false; }
+
+        static bool FormatField(string name) => new[] { "version", "formatVersion", "schemaVersion" }.Contains(name, StringComparer.OrdinalIgnoreCase);
+        static Dictionary<string, string> Identities(XElement node) => node.Attributes()
+            .Where(attr => (node.Name == "VALUE" && attr.Name == "name") ||
+                new[] { "deckNo", "modeIndex", "padIndex", "idx", "index", "unitNo" }.Contains(attr.Name.ToString()) || FormatField(attr.Name.ToString()))
+            .ToDictionary(attr => attr.Name.ToString(), attr => attr.Value);
+        static string Key(XElement node, int position)
+        {
+            var identities = Identities(node);
+            return node.Name + ":" + (identities.Count == 0 ? position.ToString(CultureInfo.InvariantCulture) :
+                string.Join(";", identities.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}={kv.Value.Length}:{kv.Value}")));
+        }
+        static bool Schema(XElement x, XElement y, int depth)
+        {
+            if (depth > 64 || x.Name != y.Name || !x.Attributes().Select(attr => attr.Name).ToHashSet().SetEquals(y.Attributes().Select(attr => attr.Name))) return false;
+            var ids = Identities(x);
+            if (!ids.OrderBy(kv => kv.Key, StringComparer.Ordinal).SequenceEqual(Identities(y).OrderBy(kv => kv.Key, StringComparer.Ordinal))) return false;
+            if (x.Name == "VALUE" && FormatField((string?)x.Attribute("name") ?? "") && (string?)x.Attribute("val") != (string?)y.Attribute("val")) return false;
+            var left = x.Elements().Select((node, index) => (Key: Key(node, index), Node: node)).OrderBy(item => item.Key, StringComparer.Ordinal).ToArray();
+            var right = y.Elements().Select((node, index) => (Key: Key(node, index), Node: node)).OrderBy(item => item.Key, StringComparer.Ordinal).ToArray();
+            return left.Length == right.Length && left.Select(item => item.Key).Distinct().Count() == left.Length &&
+                left.Zip(right).All(pair => pair.First.Key == pair.Second.Key && Schema(pair.First.Node, pair.Second.Node, depth + 1));
+        }
+        return Schema(a.Root!, b.Root!, 0);
+    }
 }

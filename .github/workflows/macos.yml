@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: macos-${{ github.workflow }}-${{ inputs.release_tag || github.ref }}
+  group: builds-${{ github.workflow }}-${{ inputs.release_tag || github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') && inputs.release_tag == '' }}
 
 jobs:
@@ -75,7 +75,7 @@ jobs:
           compression-level: 0
 
   windows:
-    name: Windows x64 app
+    name: Native Windows x64 app
     runs-on: windows-latest
     timeout-minutes: 25
     outputs:
@@ -107,7 +107,11 @@ jobs:
 
       - name: Verify Windows logic with isolated synthetic settings
         shell: pwsh
-        run: dotnet run --project Windows/RekordboxSetupCloner.Tests -c Release
+        run: |
+          dotnet publish Windows/RekordboxSetupCloner.Tests -c Release -r win-x64 -p:PublishAot=true -p:StripSymbols=true --artifacts-path dist/aot-tests-build -o dist/aot-tests
+          if ($LASTEXITCODE -ne 0) { throw 'Native test build failed.' }
+          & ./dist/aot-tests/RekordboxSetupCloner.Tests.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Native integration checks failed.' }
 
       - name: Build portable app and release archive
         shell: pwsh

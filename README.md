@@ -26,7 +26,7 @@ On macOS, you may need **System Settings → Privacy & Security → Open Anyway*
 5. Review the changes and choose **Save restore point & import**. Afterwards, you can open rekordbox.
 6. To undo the import, quit rekordbox and choose **Restore previous setup…**, selecting the restore point from before the import.
 
-Use the **same major rekordbox version** on both computers (6 or 7); the same exact version is preferable. Unknown destination preferences and incompatible layouts are skipped. MIDI mappings remain controller-specific.
+Different rekordbox versions can exchange matching settings. Version differences appear as a notice in the preview; missing preferences and incompatible layouts or XML file formats are skipped. MIDI mappings remain controller-specific.
 
 ## What transfers
 
@@ -50,9 +50,9 @@ Quit rekordbox, choose **Deck 1 → Deck 2** or **Deck 2 → Deck 1**, and selec
 | Platform | Default rekordbox settings folder |
 | --- | --- |
 | macOS | `~/Library/Application Support/Pioneer/rekordbox6` (also used by rekordbox 7) |
-| Windows | `%APPDATA%\Pioneer\rekordbox` — usually `C:\Users\[YourUsername]\AppData\Roaming\Pioneer\rekordbox` |
+| Windows | `%APPDATA%\Pioneer\rekordbox6`, falling back to `rekordbox` when it contains the settings file |
 
-You can choose another folder in the app. Before an import, Pad FX copy or restore, the original affected files are saved locally:
+You can choose another folder in the app. Version detection is optional and requires no manual selection. Before an import, Pad FX copy or restore, the original affected files are saved locally:
 
 - **macOS:** `~/Library/Application Support/Rekordbox Setup Cloner/Restore Points/`
 - **Windows:** `%LOCALAPPDATA%\Rekordbox Setup Cloner\Restore Points\`
@@ -67,7 +67,7 @@ Restore points belong to their original settings folder and replace whole files,
 bash scripts/package-release.sh
 ```
 
-**Windows** — requires the .NET 10 SDK; run in PowerShell:
+**Windows** — requires the .NET 10 SDK and Visual Studio Build Tools with **Desktop development with C++** (including the Windows SDK); run in PowerShell. Native AOT produces a standalone executable with no .NET runtime installation or bundle:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package-windows-release.ps1

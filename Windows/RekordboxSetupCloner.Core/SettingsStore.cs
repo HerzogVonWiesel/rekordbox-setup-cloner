@@ -4,16 +4,29 @@ using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 
 namespace RekordboxSetupCloner;
 
 public sealed class SettingsStore
 {
-    public static string DefaultDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Pioneer", "rekordbox");
+    private static string PioneerDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Pioneer");
+    public static string DefaultDirectory => FindSettingsDirectory(PioneerDirectory);
     public static string DefaultRecoveryDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Rekordbox Setup Cloner", "Restore Points");
     public string RecoveryDirectory { get; }
     public SettingsStore(string? recoveryDirectory = null) => RecoveryDirectory = Path.GetFullPath(recoveryDirectory ?? DefaultRecoveryDirectory);
+
+    public static string FindSettingsDirectory(string pioneerDirectory)
+    {
+        pioneerDirectory = Path.GetFullPath(pioneerDirectory);
+        foreach (var name in new[] { "rekordbox6", "rekordbox" })
+        {
+            var candidate = Path.Combine(pioneerDirectory, name);
+            if (File.Exists(Path.Combine(candidate, SettingsPolicy.MainFile))) return candidate;
+        }
+        return Path.Combine(pioneerDirectory, "rekordbox6");
+    }
 
     public static void RequireRekordboxClosed()
     {
@@ -93,11 +106,14 @@ public sealed class SettingsStore
     public static bool Same(byte[]? a, byte[]? b) => a == null ? b == null : b != null && a.AsSpan().SequenceEqual(b);
     private static string? Digest(byte[]? data) => data == null ? null : Convert.ToHexStringLower(SHA256.HashData(data));
 
+    private static byte[] MainSettings(string directory) => Read(SettingsPolicy.MainFile, directory) ??
+        throw new SetupException($"The selected folder does not contain rekordbox3.settings:\n{directory}\n\nChoose the folder containing that file. Windows installations commonly use %APPDATA%\\Pioneer\\rekordbox6. Open and quit rekordbox once if its settings have not been created yet.");
+
     private static RekordboxVersion Version(byte[] main)
     {
-        var version = new RekordboxVersion(SettingsXml.Scalars(main).GetValueOrDefault("LaunchedVersion", ""));
-        if (version.Major is not (6 or 7)) throw new SetupException("Could not identify rekordbox 6 or 7 from LaunchedVersion. Open and quit rekordbox on this computer, then select its settings folder again.");
-        return version;
+        var raw = SettingsXml.Scalars(main).GetValueOrDefault("LaunchedVersion", "").Trim();
+        // Informational metadata only. Compatibility is checked against destination settings.
+        return new RekordboxVersion(raw.Length <= 64 && !raw.Any(char.IsControl) ? raw : "");
     }
 
     private static List<string> AuxiliaryPaths(string directory)
@@ -128,7 +144,7 @@ public sealed class SettingsStore
     public SettingsInspection Inspect(string directory)
     {
         directory = Root(directory);
-        var main = Read(SettingsPolicy.MainFile, directory) ?? throw new SetupException("This folder does not contain rekordbox3.settings.");
+        var main = MainSettings(directory);
         var values = SettingsXml.Scalars(main);
         var counts = new Dictionary<SettingsGroup, int>();
         void Count(SettingsGroup? group) { if (group is { } g) counts[g] = counts.GetValueOrDefault(g) + 1; }
@@ -147,7 +163,7 @@ public sealed class SettingsStore
         RequireRekordboxClosed();
         if (groups.Count == 0) throw new SetupException("Select at least one settings group.");
         directory = Root(directory);
-        var main = Read(SettingsPolicy.MainFile, directory) ?? throw new SetupException("Missing rekordbox3.settings.");
+        var main = MainSettings(directory);
         var properties = new Dictionary<string, Dictionary<string, string>>();
         var structures = new Dictionary<string, Dictionary<string, byte[]>>();
         foreach (var file in SettingsPolicy.PreferenceFiles)
@@ -188,7 +204,8 @@ public sealed class SettingsStore
     {
         if (profile.Format != "rekordbox-setup" || profile.SchemaVersion is not (1 or 2) ||
             profile.SchemaVersion == 1 && profile.StructuredPreferences.Count != 0 || string.IsNullOrWhiteSpace(profile.Name) || profile.Name.Length > 120 ||
-            profile.RekordboxVersion?.Major is not (6 or 7) || profile.Groups == null || profile.Groups.Length == 0 ||
+            profile.RekordboxVersion?.Raw == null || profile.RekordboxVersion.Raw.Length > 64 || profile.RekordboxVersion.Raw.Any(char.IsControl) ||
+            profile.Groups == null || profile.Groups.Length == 0 ||
             profile.Groups.Any(g => !Enum.IsDefined(g)) || profile.Groups.Distinct().Count() != profile.Groups.Length ||
             profile.Properties == null || profile.Files == null || profile.Files.Count > SettingsPolicy.MaxFiles)
             throw new SetupException("This is not a supported setup backup.");
@@ -220,7 +237,7 @@ public sealed class SettingsStore
         if (profile.PreferenceCount + profile.Files.Count == 0) throw new SetupException("This backup contains no settings.");
     }
 
-    private static T LoadArchive<T>(string path)
+    private static T LoadArchive<T>(string path, JsonTypeInfo<T> metadata)
     {
         var bytes = BoundedData(path, SettingsPolicy.MaxArchiveSize);
         using var document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 32 });
@@ -238,12 +255,12 @@ public sealed class SettingsStore
             else if (element.ValueKind == JsonValueKind.Array) foreach (var item in element.EnumerateArray()) CheckDuplicates(item);
         }
         CheckDuplicates(document.RootElement);
-        return document.Deserialize<T>(ArchiveJson.Options) ?? throw new SetupException("Invalid archive.");
+        return document.Deserialize(metadata) ?? throw new SetupException("Invalid archive.");
     }
 
     public SetupProfile LoadProfile(string path)
     {
-        var profile = LoadArchive<SetupProfile>(path);
+        var profile = LoadArchive(path, ArchiveJson.ProfileInfo);
         Validate(profile);
         return profile;
     }
@@ -253,9 +270,9 @@ public sealed class SettingsStore
         Validate(profile);
         path = Path.GetFullPath(path);
         RejectReparsePoints(path);
-        if (Within(path, Path.GetDirectoryName(DefaultDirectory)!) || Within(path, Root(settingsDirectory)))
+        if (Within(path, PioneerDirectory) || Within(path, Root(settingsDirectory)))
             throw new SetupException("Save the portable backup outside rekordbox's settings folder.");
-        var data = JsonSerializer.SerializeToUtf8Bytes(profile, ArchiveJson.Options);
+        var data = JsonSerializer.SerializeToUtf8Bytes(profile, ArchiveJson.ProfileInfo);
         if (data.Length > SettingsPolicy.MaxArchiveSize) throw new SetupException("Backup exceeds the size limit.");
         AtomicWrite(path, data);
     }
@@ -265,10 +282,8 @@ public sealed class SettingsStore
         RequireRekordboxClosed();
         Validate(profile);
         var directory = Root(destination);
-        var main = Read(SettingsPolicy.MainFile, directory) ?? throw new SetupException("Missing rekordbox3.settings.");
+        var main = MainSettings(directory);
         var targetVersion = Version(main);
-        if (targetVersion.Major != profile.RekordboxVersion.Major)
-            throw new SetupException($"This backup is from rekordbox {profile.RekordboxVersion.Display}; this computer last used {targetVersion.Display}. Use the same major version on both computers.");
         var edits = new List<FileEdit>();
         var changes = new List<Change>();
         var skipped = new List<string>();
@@ -282,7 +297,18 @@ public sealed class SettingsStore
             var before = Read(file, directory);
             observed[file] = before;
             if (before == null) { skipped.Add($"{file}: not present on this computer"); continue; }
-            var current = SettingsXml.Scalars(before, file);
+            Dictionary<string, string> current;
+            Dictionary<string, System.Xml.Linq.XElement> elements;
+            try
+            {
+                current = SettingsXml.Scalars(before, file);
+                elements = SettingsXml.Elements(SettingsXml.Parse(before));
+            }
+            catch (Exception error) when (error is SetupException or System.Xml.XmlException)
+            {
+                skipped.Add($"{file}: destination preference structure is unsupported");
+                continue;
+            }
             var updates = new Dictionary<string, string>();
             foreach (var key in incoming.Keys.Order(StringComparer.Ordinal))
             {
@@ -291,7 +317,6 @@ public sealed class SettingsStore
                 updates[key] = incoming[key];
                 changes.Add(new Change(SettingsPolicy.Group(key, file)!.Value, key, $"{old} → {incoming[key]}"));
             }
-            var elements = SettingsXml.Elements(SettingsXml.Parse(before));
             var structureUpdates = new Dictionary<string, byte[]>();
             foreach (var key in fragments.Keys.Order(StringComparer.Ordinal))
             {
@@ -321,6 +346,12 @@ public sealed class SettingsStore
             if (group == SettingsGroup.effects && before == null) { skipped.Add($"{path}: not present on this computer"); continue; }
             var after = profile.Files[path];
             if (Same(before, after)) continue;
+            if (before != null && (path.EndsWith(".xml", StringComparison.Ordinal) || path.EndsWith(".mappings", StringComparison.Ordinal)) &&
+                !SettingsXml.CompatibleFile(before, after))
+            {
+                skipped.Add($"{path}: XML file format differs or is unsupported on this computer");
+                continue;
+            }
             edits.Add(new FileEdit(path, before, after));
             changes.Add(new Change(group, path, before == null ? "Add mapping file" : "Replace settings file"));
         }
@@ -331,7 +362,7 @@ public sealed class SettingsStore
     {
         RequireRekordboxClosed();
         var directory = Root(destination);
-        var main = Read(SettingsPolicy.MainFile, directory) ?? throw new SetupException("Missing rekordbox3.settings.");
+        var main = MainSettings(directory);
         var version = Version(main);
         var before = Read(PadFXSettings.Filename, directory) ?? throw new SetupException("Missing PadFxSettings.xml.");
         var copy = PadFXSettings.Copy(before, sourceDeck, targetDeck, banks);
@@ -353,14 +384,14 @@ public sealed class SettingsStore
     private string WriteRecovery(List<FileEdit> edits, string destination, string name)
     {
         RejectReparsePoints(RecoveryDirectory);
-        if (Within(RecoveryDirectory, destination) || Within(RecoveryDirectory, Path.GetDirectoryName(DefaultDirectory)!))
+        if (Within(RecoveryDirectory, destination) || Within(RecoveryDirectory, PioneerDirectory))
             throw new SetupException("Restore points must be stored outside rekordbox's settings folder.");
         Directory.CreateDirectory(RecoveryDirectory);
         RejectReparsePoints(RecoveryDirectory);
         ProtectDirectory(RecoveryDirectory);
         var archive = new RecoveryArchive("rekordbox-local-recovery", 1, DateTimeOffset.UtcNow, destination, name,
             edits.Select(e => new RecoveryEntry(e.Path, e.Before, Digest(e.After))).ToArray());
-        var data = JsonSerializer.SerializeToUtf8Bytes(archive, ArchiveJson.Options);
+        var data = JsonSerializer.SerializeToUtf8Bytes(archive, ArchiveJson.RecoveryInfo);
         if (data.Length > SettingsPolicy.MaxArchiveSize) throw new SetupException("Restore point exceeds the size limit.");
         var path = Path.Combine(RecoveryDirectory, $"{archive.CreatedAt:yyyy-MM-ddTHH-mm-ssZ}-{Guid.NewGuid().ToString("N")[..8]}.rbrecovery");
         // The file inherits the protected current-user-only ACL from the directory at creation.
@@ -453,7 +484,7 @@ public sealed class SettingsStore
 
     public RecoveryArchive LoadRecovery(string path, string destination)
     {
-        var archive = LoadArchive<RecoveryArchive>(path);
+        var archive = LoadArchive(path, ArchiveJson.RecoveryInfo);
         var directory = Root(destination);
         if (archive.Format != "rekordbox-local-recovery" || archive.SchemaVersion != 1 || archive.Destination != directory ||
             archive.Entries == null || archive.Entries.Length == 0 || archive.Entries.Length > SettingsPolicy.MaxFiles + SettingsPolicy.PreferenceFiles.Length ||

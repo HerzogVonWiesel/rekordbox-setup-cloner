@@ -46,7 +46,7 @@ struct ContentView: View {
                         .font(.headline)
                     Spacer()
                     if let inspection = model.inspection {
-                        Text("rekordbox \(inspection.version.display)").font(.callout.monospacedDigit())
+                        Text(inspection.version.label).font(.callout.monospacedDigit())
                         if let enabled = inspection.stemsEnabled {
                             Text(enabled ? "STEMS on" : "STEMS off")
                                 .font(.caption.weight(.semibold))
@@ -231,13 +231,13 @@ struct ImportPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Preview “\(plan.profile.name)”").font(.title2.bold())
-            Text("Saved \(plan.profile.createdAt.formatted(date: .abbreviated, time: .shortened)) · rekordbox \(plan.profile.rekordboxVersion.display)")
+            Text("Saved \(plan.profile.createdAt.formatted(date: .abbreviated, time: .shortened)) · \(plan.profile.rekordboxVersion.label)")
                 .foregroundStyle(.secondary)
             Text("Destination: \(plan.destination.path)")
                 .font(.caption.monospaced()).textSelection(.enabled)
 
-            if plan.profile.rekordboxVersion.components != plan.targetVersion.components {
-                Label("This Mac uses \(plan.targetVersion.display). Only recognised preferences and compatible settings files are included.", systemImage: "info.circle")
+            if let notice = plan.compatibilityNotice {
+                Label(notice, systemImage: "info.circle")
                     .font(.callout).foregroundStyle(.orange)
             }
 
@@ -303,7 +303,7 @@ struct PadFXCopyPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Copy Pad FX: \(plan.direction.title)").font(.title2.bold())
-            Text("\(plan.banks.title) · rekordbox \(plan.version.display)").foregroundStyle(.secondary)
+            Text("\(plan.banks.title) · \(plan.version.label)").foregroundStyle(.secondary)
             Text("Destination: \(plan.destination.path)")
                 .font(.caption.monospaced()).textSelection(.enabled)
             Text("\(plan.changes.count) pad slots will change on deck \(plan.direction.targetDeck)")

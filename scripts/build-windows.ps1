@@ -39,9 +39,9 @@ try {
     $graphics.Dispose(); $bitmap.Dispose(); $source.Dispose(); $png.Dispose()
 }
 
-# Self-contained portable executable: users do not need to install .NET.
+# Compile to native code using the Windows SDK/MSVC toolchain. No runtime bundle is shipped.
 dotnet publish $project -c Release -r $Runtime --self-contained true -o $output `
-    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+    -p:PublishAot=true -p:PublishSingleFile=false -p:StripSymbols=true -p:IlcOptimizationPreference=Size `
     -p:DebugType=None -p:DebugSymbols=false "-p:Version=$version" "-p:ApplicationIcon=$icon" --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Windows publish failed.' }
 Write-Output "Built $output\RekordboxSetupCloner.exe (version $version)"

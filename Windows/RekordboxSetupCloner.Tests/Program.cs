@@ -15,8 +15,75 @@ Directory.CreateDirectory(temporary);
 var passed = 0;
 try
 {
-    Test("Windows default settings location", () =>
-        Check(SettingsStore.DefaultDirectory == Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Pioneer", "rekordbox")));
+    Test("Windows settings-folder discovery prefers actual rekordbox6 settings", () =>
+    {
+        var pioneer = Path.Combine(temporary, "folder-discovery", "Pioneer");
+        var current = Path.Combine(pioneer, "rekordbox6");
+        var legacy = Path.Combine(pioneer, "rekordbox");
+        Check(SettingsStore.FindSettingsDirectory(pioneer) == current);
+        Directory.CreateDirectory(legacy);
+        File.WriteAllText(Path.Combine(legacy, SettingsPolicy.MainFile), "legacy settings");
+        Check(SettingsStore.FindSettingsDirectory(pioneer) == legacy);
+        Directory.CreateDirectory(current);
+        Check(SettingsStore.FindSettingsDirectory(pioneer) == legacy, "An empty rekordbox6 folder should not hide actual settings.");
+        File.WriteAllText(Path.Combine(current, SettingsPolicy.MainFile), "current settings");
+        Check(SettingsStore.FindSettingsDirectory(pioneer) == current);
+    });
+
+    Test("Missing version metadata needs no selection for backup, import, Pad FX or recovery", () =>
+    {
+        var (source, target, store) = Fixture("missing-version");
+        foreach (var folder in new[] { source, target })
+        {
+            var document = SettingsXml.Parse(File.ReadAllBytes(Path.Combine(folder, SettingsPolicy.MainFile)));
+            SettingsXml.Elements(document)["LaunchedVersion"].Remove();
+            File.WriteAllBytes(Path.Combine(folder, SettingsPolicy.MainFile), SettingsXml.Bytes(document));
+        }
+        var original = Snapshot(target);
+        var found = store.Inspect(target);
+        Check(found.Version.Components == null && found.Version.Label == "rekordbox version unavailable");
+        var profile = store.Capture(source, "Windows setup", [SettingsGroup.stems]);
+        Check(profile.RekordboxVersion.Raw == "");
+        Check(!profile.Properties[SettingsPolicy.MainFile].ContainsKey("LaunchedVersion"));
+        var backup = Path.Combine(temporary, "windows6.rbsetup");
+        store.SaveProfile(profile, backup, source);
+        var plan = store.Plan(store.LoadProfile(backup), target, [SettingsGroup.stems]);
+        Check(plan.TargetVersion.Components == null && plan.CompatibilityNotice != null && plan.Edits.Count > 0);
+        var recovery = store.Apply(plan);
+        Check(!SettingsXml.Scalars(File.ReadAllBytes(Path.Combine(target, SettingsPolicy.MainFile))).ContainsKey("LaunchedVersion"));
+        store.Restore(store.RecoveryEdits(store.LoadRecovery(recovery, target), target).Edits, target);
+        Check(SnapshotsEqual(original, Snapshot(target)));
+        var pad = store.PlanPadFXCopy(target, 1, 2, [0]);
+        Check(pad.Version.Components == null);
+        recovery = store.Apply(pad);
+        store.Restore(store.RecoveryEdits(store.LoadRecovery(recovery, target), target).Edits, target);
+        Check(SnapshotsEqual(original, Snapshot(target)));
+        Check(store.Plan(profile with { RekordboxVersion = new RekordboxVersion("7.2.19") }, target, [SettingsGroup.stems]).Edits.Count > 0);
+    });
+
+    Test("Version metadata is informational, including absent and unrecognised values", () =>
+    {
+        var (_, target, store) = Fixture("version-evidence");
+        var found = store.Inspect(target);
+        Check(found.Version.Major == 7);
+        var mainPath = Path.Combine(target, SettingsPolicy.MainFile);
+        var document = SettingsXml.Parse(File.ReadAllBytes(mainPath));
+        SettingsXml.Elements(document)["LaunchedVersion"].SetAttributeValue("val", "8.0.0");
+        File.WriteAllBytes(mainPath, SettingsXml.Bytes(document));
+        Check(store.Inspect(target).Version.Major == 8);
+        foreach (var raw in new[] { "  ", "unrecognised", new string('x', 65) })
+        {
+            SettingsXml.Elements(document)["LaunchedVersion"].SetAttributeValue("val", raw);
+            File.WriteAllBytes(mainPath, SettingsXml.Bytes(document));
+            Check(store.Inspect(target).Version.Components == null);
+            var profile = store.Capture(target, "Unknown version", [SettingsGroup.stems]);
+            Check(profile.RekordboxVersion.Components == null);
+            SettingsStore.Validate(profile);
+        }
+        Check(new RekordboxVersion("").CompatibilityNotice(new RekordboxVersion("")) != null);
+        Check(new RekordboxVersion("70219").CompatibilityNotice(new RekordboxVersion("7.2.19")) == null);
+        Check(new RekordboxVersion("7.2.19").CompatibilityNotice(new RekordboxVersion("6.8.5")) != null);
+    });
 
     Test("Mac scalar allowlist parity", () =>
     {
@@ -91,19 +158,76 @@ try
         Check(fileRules.All(r => r.IdentityReference == user));
     });
 
-    Test("Major version, missing-key/effects skipping and pad version mismatch", () =>
+    Test("Cross-major transfers preview compatible settings and skip missing keys/files", () =>
     {
         var (source, target, store) = Fixture("versions");
         var profile = store.Capture(source, "Version checks", GroupInfo.DefaultSelection);
-        Reject(() => store.Plan(profile with { RekordboxVersion = new RekordboxVersion("6.8.0") }, target, GroupInfo.DefaultSelection));
+        Check(store.Plan(profile, target, GroupInfo.DefaultSelection).CompatibilityNotice == null);
         var main = SettingsXml.Parse(File.ReadAllBytes(Path.Combine(target, SettingsPolicy.MainFile)));
+        SettingsXml.Elements(main)["LaunchedVersion"].SetAttributeValue("val", "60805");
         SettingsXml.Elements(main)["MenuFontName"].Remove();
         File.WriteAllBytes(Path.Combine(target, SettingsPolicy.MainFile), SettingsXml.Bytes(main));
         File.Delete(Path.Combine(target, "FxUnitSettings7.xml"));
         File.WriteAllText(Path.Combine(target, "pad", "Version"), "different");
         var plan = store.Plan(profile, target, GroupInfo.DefaultSelection);
+        Check(plan.TargetVersion.Major == 6 && plan.CompatibilityNotice != null && plan.Edits.Count > 0);
         Check(plan.Skipped.Any(s => s.StartsWith("MenuFontName:")) && plan.Skipped.Any(s => s.StartsWith("FxUnitSettings7.xml:")));
         Check(!plan.Edits.Any(e => e.Path.StartsWith("pad/")));
+        var before = Snapshot(target);
+        var recovery = store.Apply(plan);
+        Check(SettingsXml.Scalars(File.ReadAllBytes(Path.Combine(target, SettingsPolicy.MainFile)))["PartAnalysisQuality"] == "1");
+        Check(!File.Exists(Path.Combine(target, "FxUnitSettings7.xml")));
+        store.Restore(store.RecoveryEdits(store.LoadRecovery(recovery, target), target).Edits, target);
+        Check(SnapshotsEqual(before, Snapshot(target)));
+        var reverseProperties = profile.Properties.ToDictionary(kv => kv.Key, kv => kv.Value.ToDictionary());
+        reverseProperties[SettingsPolicy.MainFile]["PartAnalysisQuality"] = "0";
+        var reverse = store.Plan(profile with { RekordboxVersion = new RekordboxVersion("6.8.5"), Properties = reverseProperties }, source, GroupInfo.DefaultSelection);
+        Check(reverse.TargetVersion.Major == 7 && reverse.CompatibilityNotice != null && reverse.Edits.Count > 0);
+        var beforeSource = Snapshot(source);
+        recovery = store.Apply(reverse);
+        Check(SettingsXml.Scalars(File.ReadAllBytes(Path.Combine(source, SettingsPolicy.MainFile)))["PartAnalysisQuality"] == "0");
+        store.Restore(store.RecoveryEdits(store.LoadRecovery(recovery, source), source).Edits, source);
+        Check(SnapshotsEqual(beforeSource, Snapshot(source)));
+    });
+
+    Test("Incompatible XML effects and destination containers are skipped independently", () =>
+    {
+        var (source, target, store) = Fixture("file-formats");
+        var sourcePad = SettingsXml.Parse(File.ReadAllBytes(Path.Combine(source, PadFXSettings.Filename)));
+        sourcePad.Descendants("PADFXINFO_500").First().SetAttributeValue("effect", "different-effect");
+        File.WriteAllBytes(Path.Combine(source, PadFXSettings.Filename), SettingsXml.Bytes(sourcePad));
+        var profile = store.Capture(source, "Schema checks", GroupInfo.DefaultSelection);
+        var targetPad = SettingsXml.Parse(File.ReadAllBytes(Path.Combine(target, PadFXSettings.Filename)));
+        foreach (var entry in targetPad.Descendants("PADFXINFO_500").ToArray()) entry.Name = "PADFXINFO_400";
+        File.WriteAllBytes(Path.Combine(target, PadFXSettings.Filename), SettingsXml.Bytes(targetPad));
+        File.WriteAllText(Path.Combine(target, "FxUnitSettings7.xml"), "<PROPERTIES><VALUE name='fx' val='0' extra='destination-only'/></PROPERTIES>");
+        File.WriteAllText(Path.Combine(target, SettingsPolicy.SamplerFile), "<PROPERTIES><VALUE name='SamplerSet'><DifferentContainer/></VALUE></PROPERTIES>");
+        File.WriteAllText(Path.Combine(target, "KeyMappings", "preset.mappings"), "<PROPERTIES><VALUE name='different-schema' val='0'/></PROPERTIES>");
+        var before = Snapshot(target);
+        var plan = store.Plan(profile, target, GroupInfo.DefaultSelection);
+        foreach (var path in new[] { PadFXSettings.Filename, "FxUnitSettings7.xml", SettingsPolicy.SamplerFile, "KeyMappings/preset.mappings" })
+        {
+            Check(plan.Skipped.Any(s => s.StartsWith(path + ":")), $"Expected {path} to be skipped.");
+            Check(!plan.Edits.Any(e => e.Path == path));
+        }
+        Check(plan.Edits.Any(e => e.Path == SettingsPolicy.MainFile));
+        var recovery = store.Apply(plan);
+        Check(SettingsStore.Same(before[PadFXSettings.Filename], File.ReadAllBytes(Path.Combine(target, PadFXSettings.Filename))));
+        store.Restore(store.RecoveryEdits(store.LoadRecovery(recovery, target), target).Edits, target);
+        Check(SnapshotsEqual(before, Snapshot(target)));
+    });
+
+    Test("Whole XML schema matching preserves slot IDs, format versions and extra fields", () =>
+    {
+        byte[] Xml(string body) => Encoding.UTF8.GetBytes("<PROPERTIES>" + body + "</PROPERTIES>");
+        var current = Xml("<VALUE name='fx'><FXSET><FX idx='0' selected='1'/><FX idx='1' selected='2'/></FXSET></VALUE><VALUE name='Version' val='1'/>");
+        var compatible = Xml("<VALUE name='Version' val='1'/><VALUE name='fx'><FXSET><FX idx='1' selected='5'/><FX idx='0' selected='3'/></FXSET></VALUE>");
+        Check(SettingsXml.CompatibleFile(current, compatible));
+        Check(!SettingsXml.CompatibleFile(current, Xml("<VALUE name='fx'><FXSET><FX idx='0' selected='3'/><FX idx='2' selected='5'/></FXSET></VALUE><VALUE name='Version' val='1'/>")));
+        Check(!SettingsXml.CompatibleFile(current, Xml("<VALUE name='fx'><FXSET><FX idx='0' selected='3'/><FX idx='1' selected='5'/></FXSET></VALUE><VALUE name='Version' val='2'/>")));
+        Check(!SettingsXml.CompatibleFile(current, Xml("<VALUE name='fx'><FXSET><FX idx='0' selected='3' extra='7'/><FX idx='1' selected='5'/></FXSET></VALUE><VALUE name='Version' val='1'/>")));
+        Check(!SettingsXml.CompatibleFile(current, Xml("<VALUE name='fx'><FXSET><FX idx='0' selected='3'/><FX idx='0' selected='5'/></FXSET></VALUE><VALUE name='Version' val='1'/>")));
+        Check(!SettingsXml.CompatibleFile(current, [255]));
     });
 
     Test("Stale previews, including unchanged files and absent files", () =>
@@ -265,7 +389,7 @@ try
         Reject(() => store.Capture(source, "Too large", [SettingsGroup.mappings]));
         File.Delete(Path.Combine(source, "MidiMappings", "large.midi.csv"));
         var profile = store.Capture(source, "Invalid values", GroupInfo.DefaultSelection);
-        var json = JsonSerializer.Serialize(profile, ArchiveJson.Options);
+        var json = JsonSerializer.Serialize(profile, ArchiveJson.ProfileInfo);
         File.WriteAllText(oversized, json.Replace("\"stems\"", "0", StringComparison.Ordinal));
         Reject(() => store.LoadProfile(oversized));
         var node = System.Text.Json.Nodes.JsonNode.Parse(json)!;
