@@ -49,6 +49,8 @@ To publish a release:
 
 The tag workflow builds the app, checks both binary architectures and its ad-hoc signature, then publishes the ZIP and checksum as a GitHub **pre-release**. It uses the repository's built-in `GITHUB_TOKEN`; no extra credentials are needed. Version tags must match the app version. Releases remain previews until runtime verification is complete.
 
+For an existing tag, you can also use **Actions → macOS builds and releases → Run workflow** on `main`, entering the tag in `release_tag`. This builds the tagged source and publishes any missing release assets. Leave the field empty for a build-only run.
+
 To produce the same release assets locally, run `bash scripts/package-release.sh`. Nothing in the build/release workflow starts the app or accesses rekordbox settings.
 
 ### App artwork
