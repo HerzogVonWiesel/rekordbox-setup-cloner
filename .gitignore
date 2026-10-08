@@ -7,3 +7,5 @@ dist/
 .env.*
 *.p12
 *.p8
+**/bin/
+**/obj/

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>RekordboxSetupCloner</AssemblyName>
+    <Product>Rekordbox Setup Cloner</Product>
+    <Description>Portable rekordbox preferences and local restore points</Description>
+    <Version>0.2.0</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../RekordboxSetupCloner.Core/RekordboxSetupCloner.Core.csproj" />
+    <EmbeddedResource Include="../../Resources/AppIcon.png" LogicalName="AppIcon.png" />
+  </ItemGroup>
+</Project>
